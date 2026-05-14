@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+jinja2
+openai
+python-dotenv
+requests
+gunicorn
+python-jose
+passlib[bcrypt]
+alembic
+soniox>=2.2.0
+httpx>=0.28.0
+edge-tts
+langdetect

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dịch văn bản</title>
+
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            background-color: #f8f9fa;
+            padding-top: 70px;
+        }
+
+        .container {
+            max-width: 600px;
+        }
+
+        .translate-button {
+            width: 100%;
+        }
+
+        .navbar {
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        #progress-container {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary fixed-top">
+        <a class="navbar-brand" href="#">Ứng dụng dịch thuật</a>
+    </nav>
+
+    <div class="container">
+        <h1 class="text-center mt-4">Dịch văn bản</h1>
+
+        <form id="translationForm">
+            <div class="form-group">
+                <label for="textToTranslate">Văn bản cần dịch</label>
+                <textarea class="form-control" id="textToTranslate" rows="4"
+                    placeholder="Nhập nội dung tại đây..."></textarea>
+            </div>
+
+            <div class="form-group">
+                <label for="languages">Ngôn ngữ (cách nhau bằng dấu phẩy)</label>
+                <input type="text" class="form-control" id="languages" placeholder="ví dụ: es, fr, de">
+            </div>
+            <button type="button" class="btn btn-primary translate-button" onclick="submitTranslation()">Dịch</button>
+        </form>
+
+        <div class="mt-4" id="results" style="display: none;">
+            <h3>Kết quả dịch</h3>
+            <pre id="translationResults"></pre>
+        </div>
+
+        <div class="mt-4" id="progress-container">
+            <h4 id="progress-text">Đang dịch...</h4>
+            <div class="progress">
+                <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated"
+                    role="progressbar" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <div class="mt-4">
+            <label for="search-id">Kiểm tra bản dịch theo ID</label>
+            <input type="number" id="search-id" class="form-control" placeholder="Nhập ID bản dịch">
+            <button id="search-button" class="btn btn-info mt-2" onclick="checkTranslationStatus()">Kiểm tra trạng
+                thái</button>
+            <button id="content-button" class="btn btn-secondary mt-2" onclick="checkTranslationContent()">Xem nội
+                dung</button>
+        </div>
+
+        <div class="mt-4" id="status-container" style="display: none;">
+            <h4>Trạng thái bản dịch</h4>
+            <pre id="statusResult"></pre>
+        </div>
+
+        <div class="mt-4" id="content-container" style="display: none;">
+            <h4>Nội dung bản dịch</h4>
+            <pre id="contentResult"></pre>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+
+    <script>
+        async function submitTranslation() {
+            const text = document.getElementById('textToTranslate').value;
+            const languages = document.getElementById('languages').value.split(',').map(lang => lang.trim());
+
+            if (!text || languages.length === 0 || !languages[0]) {
+                alert("Vui lòng nhập văn bản và ngôn ngữ cần dịch.");
+                return;
+            }
+
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
+            progressBar.classList.remove('bg-success');
+            progressBar.classList.add('bg-primary');
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Đang dịch...';
+
+            try {
+                const response = await axios.post('/translation/translate', {
+                    text: text,
+                    languages: languages
+                });
+
+                const taskId = response.data.task_id;
+                alert(`Task ID: ${taskId}`)
+
+                document.getElementById('progress-container').style.display = 'block';
+                document.getElementById('results').style.display = 'none';
+                document.getElementById('status-container').style.display = 'none';
+                document.getElementById('content-container').style.display = 'none';
+
+                let translationResult = null;
+                let progress = 0;
+                while (progress < 100) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    const resultResponse = await axios.get(`/translation/translate/${taskId}`);
+                    translationResult = resultResponse.data;
+                    if (translationResult === 'completed') {
+                        progress = 100;
+                    } else {
+                        progres.style.width = '50%';
+                    }
+                }
+
+                progressBar.classList.remove('bg-primary');
+                progressBar.classList.add('bg-success');
+                progressBar.style.width = '100%';
+                progressText.textContent = 'Translation complete!';
+
+                document.getElementById('translationResults').textContent = JSON.stringify(translationResult.translations, null, 2);
+                document.getElementById('result').style.display = 'block';
+
+            } catch (error) {
+                console.error("Error submitting translation", error);
+                alert("An error occurred while translating, please try again.");
+            }
+        }
+
+        // We want to the search functionality component
+        // TODO
+        async function checkTranslationStatus() {
+            return;
+        }
+
+        // TODO
+        async function checkTranslationContent() {
+            return;
+
+        }
+    </script>
+
+</body>
+
+</html>
