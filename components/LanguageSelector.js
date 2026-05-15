@@ -3,6 +3,7 @@ import { ArrowLeftRight } from "lucide-react"
 
 export default function LanguageSelector({ onChange }) {
   const languages = [
+    { name: "Auto Detect", code: "un" },
     { name: "English", code: "us" },
     { name: "Vietnamese", code: "vn" },
     { name: "Japanese", code: "jp" },
@@ -10,8 +11,8 @@ export default function LanguageSelector({ onChange }) {
     { name: "Chinese", code: "cn" }
   ]
 
-  const [from, setFrom] = useState(languages[0])
-  const [to, setTo] = useState(languages[1])
+  const [from, setFrom] = useState(languages[2]) // Default to Vietnamese (was 1, now 2 because of Auto Detect)
+  const [to, setTo] = useState(languages[1]) // Default to English
   const [rotate, setRotate] = useState(false)
 
   useEffect(() => {

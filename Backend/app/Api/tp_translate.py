@@ -9,7 +9,7 @@ from app.database.database import SessionLocal, get_db
 from app.models import User, TranslationHistory, TpNotification
 from app.Core.auth import decode_access_token, get_current_user
 from app.services.soniox_engine import run_soniox_bidirectional
-from app.services.tts_engine import synthesize_google_tts
+from app.services.tts_edge import text_to_speech as text_to_speech_edge
 from app.services.billing_service import charge_and_log_usage
 
 router = APIRouter(prefix="/tp", tags=["translation-project"])
@@ -34,6 +34,16 @@ async def websocket_translate(websocket: WebSocket):
         source_lang = cfg.get("source_lang", "vi")
         target_lang = cfg.get("target_lang", "en")
         service_type = cfg.get("service_type", "voice") # "translate" or "voice"
+
+        # Nếu là auto detect, chúng ta truyền danh sách các ngôn ngữ hỗ trợ làm hints
+        if source_lang == "auto":
+            source_lang_hints = ["vi", "en", "ja", "ko", "zh"]
+        else:
+            source_lang_hints = [source_lang]
+        
+        # Đảm bảo target_lang cũng nằm trong hints
+        if target_lang not in source_lang_hints:
+            source_lang_hints.append(target_lang)
 
         payload = decode_access_token(token)
         if not payload:
@@ -154,7 +164,8 @@ async def websocket_translate(websocket: WebSocket):
         recv_task = asyncio.create_task(receive_audio())
         try:
             await run_soniox_bidirectional(
-                audio_queue, send_callback, source_lang, target_lang, loop
+                audio_queue, send_callback, source_lang, target_lang, loop,
+                language_hints=source_lang_hints
             )
         finally:
             recv_task.cancel()
@@ -206,14 +217,16 @@ async def text_to_speech(
         raise HTTPException(status_code=400, detail="Missing text")
 
     try:
-        audio_bytes = synthesize_google_tts(text, lang)
+        audio_bytes = await text_to_speech_edge(text, lang)
+        if not audio_bytes:
+             raise HTTPException(status_code=500, detail="TTS generation failed")
 
         # Billing: log usage and deduct credits
         try:
             charge_and_log_usage(
                 db,
                 user_id=current_user.id,
-                provider="google_tts",
+                provider="google_tts", # Giữ nguyên provider name cho billing rule
                 model=None,
                 feature="tts",
                 endpoint="/tp/translate/tts",

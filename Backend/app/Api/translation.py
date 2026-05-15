@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.database.database import get_db
@@ -550,63 +550,84 @@ async def generate_tts(
 
 @router.get("/tts")
 async def generate_tts_get(
+    request: Request,
     text: str = Query(...),
     lang: str = Query("auto"),
     token: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """
-    GET version of TTS for direct use in <audio src="...">.
-    Supports token in query parameter for authentication.
+    GET version of TTS. Supports token in query OR Authorization header.
     """
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
-    user_id = None
-    # Manual token validation if provided via query
-    if token:
-        from app.Core.auth import SECRET_KEY, ALGORITHM
-        from jose import jwt, JWTError
-        try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            email = payload.get("sub")
-            if email:
-                user = db.query(User).filter(User.email == email).first()
-                if user:
-                    user_id = user.id
-                    # Billing: Charge for TTS
-                    try:
-                        charge_and_log_usage(
-                            db,
-                            user_id=user.id,
-                            provider="google_tts",
-                            model=None,
-                            feature="tts",
-                            endpoint="/translation/tts",
-                            input_chars=len(text),
-                        )
-                    except ValueError as ve:
-                        if str(ve) == "INSUFFICIENT_CREDITS":
-                            # Với GET request trả về audio, nếu hết credit có thể log lỗi hoặc raise 402
-                            # Tuy nhiên Audio element có thể không handle được 402 tốt.
-                            print(f"❌ User {email} insufficient credits for TTS")
-                            raise HTTPException(status_code=402, detail="INSUFFICIENT_CREDITS")
-                else:
-                    print(f"GET /tts: User {email} not found")
-            else:
-                print("GET /tts: Invalid token payload")
-        except JWTError as e:
-            print(f"GET /tts: Token error: {e}")
-            
-    print(f"🔊 GET /tts: Streaming '{text[:30]}...' (lang: {lang}) (User: {user_id})")
+    user = None
     
-    return StreamingResponse(
-        text_to_speech_stream(text, target_lang=lang),
-        media_type="audio/mpeg",
-        headers={
-            "Content-Disposition": "inline; filename=speech.mp3",
-            "Cache-Control": "no-cache",
-            "Access-Control-Allow-Origin": "http://localhost:3000",
-            "Access-Control-Allow-Credentials": "true",
-        }
-    )
+    # 1. Thử lấy user từ Authorization Header (cho axios)
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        bearer_token = auth_header.split(" ")[1]
+        from app.Core.auth import decode_access_token
+        try:
+            payload = decode_access_token(bearer_token)
+            if payload:
+                email = payload.get("sub")
+                user = db.query(User).filter(User.email == email).first()
+        except Exception as e:
+            print(f"❌ GET /tts: Header token decode error: {e}")
+    
+    # 2. Nếu không có header, thử lấy từ query param 'token' (cho direct src)
+    if not user and token:
+        from app.Core.auth import decode_access_token
+        try:
+            payload = decode_access_token(token)
+            if payload:
+                email = payload.get("sub")
+                user = db.query(User).filter(User.email == email).first()
+        except Exception as e:
+            print(f"❌ GET /tts: Query token decode error: {e}")
+
+    if not user:
+        print("❌ GET /tts: Unauthorized access attempt")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    user_id = user.id
+    user_email = user.email
+
+    # Billing: Charge for TTS
+    try:
+        charge_and_log_usage(
+            db,
+            user_id=user.id,
+            provider="google_tts",
+            model=None,
+            feature="tts",
+            endpoint="/translation/tts",
+            input_chars=len(text),
+        )
+    except ValueError as ve:
+        if str(ve) == "INSUFFICIENT_CREDITS":
+            print(f"❌ User {user_email} insufficient credits for TTS")
+            raise HTTPException(status_code=402, detail="INSUFFICIENT_CREDITS")
+        raise
+            
+    print(f"🔊 GET /tts: Generating audio for '{text[:30]}...' (lang: {lang}) (User: {user_id})")
+    
+    try:
+        audio_bytes = await text_to_speech(text, target_lang=lang)
+        if not audio_bytes:
+            print("❌ GET /tts: text_to_speech returned None")
+            raise HTTPException(status_code=500, detail="TTS generation failed")
+            
+        return Response(
+            content=audio_bytes,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "inline; filename=speech.mp3",
+                "Cache-Control": "no-cache",
+            }
+        )
+    except Exception as e:
+        print(f"❌ GET /tts error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

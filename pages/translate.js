@@ -69,6 +69,7 @@ export default function TranslatePage() {
 
   const langMap = useMemo(
     () => ({
+      "Auto Detect": "auto",
       English: "en",
       Vietnamese: "vi",
       Japanese: "ja",

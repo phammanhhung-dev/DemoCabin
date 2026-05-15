@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic, Languages } from "lucide-react";
+import { Mic, Languages, Play, Volume2 } from "lucide-react";
+import API, { BASE_URL } from "../services/api";
 
 function formatTime(d) {
   try {
@@ -94,13 +95,52 @@ export default function ConversationSegments({ segments }) {
             </div>
 
             <div className="relative group p-6 md:p-8">
-              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400 mb-3 opacity-60">
-                <Languages size={14} /> Dịch
+              <div className="flex items-center justify-between mb-3 opacity-60">
+                <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-emerald-400">
+                  <Languages size={14} /> Dịch
+                </div>
+                {seg.translated && (
+                  <button
+                    onClick={async (e) => {
+                      const btn = e.currentTarget;
+                      btn.disabled = true;
+                      btn.classList.add("animate-pulse");
+
+                      try {
+                        const lang = seg.speakerLang === seg.sourceLang ? seg.targetLang : seg.sourceLang;
+                        // Sử dụng axios để fetch blob
+                        const response = await API.get("/translation/tts", {
+                          params: {
+                            text: seg.translated,
+                            lang: lang || "auto"
+                          },
+                          responseType: 'blob'
+                        });
+
+                        if (response.data) {
+                          const url = URL.createObjectURL(response.data);
+                          const audio = new Audio(url);
+                          audio.onended = () => URL.revokeObjectURL(url);
+                          await audio.play();
+                        }
+                      } catch (err) {
+                        console.error("Manual playback failed:", err);
+                      } finally {
+                        btn.disabled = false;
+                        btn.classList.remove("animate-pulse");
+                      }
+                    }}
+                    className="p-2 hover:bg-white/10 rounded-full text-emerald-400 transition-colors disabled:opacity-50"
+                    title="Phát âm thanh"
+                  >
+                    <Volume2 size={16} />
+                  </button>
+                )}
               </div>
               <div className="whitespace-pre-wrap text-lg md:text-xl font-medium leading-relaxed text-white">
                 {seg.translated || ""}
                 {seg.interimTranslated ? (
-                  <span className="text-emerald-500/50 italic">{seg.translated ? "\n" : ""}{seg.interimTranslated}</span>
+                  <span className="text-slate-500 italic">{seg.translated ? "\n" : ""}{seg.interimTranslated}</span>
                 ) : null}
               </div>
             </div>

@@ -78,6 +78,7 @@ async def text_to_speech_stream(text: str, target_lang: str = "auto"):
     """
     Generator function to stream Edge TTS chunks.
     """
+    print(f"🎤 TTS Stream Request: '{text[:30]}...' lang={target_lang}")
     if not text or not text.strip():
         return
 
@@ -88,12 +89,16 @@ async def text_to_speech_stream(text: str, target_lang: str = "auto"):
         target_lang = "en"
     
     voice = VOICE_MAP.get(target_lang, VOICE_MAP["vi"])
+    print(f"🎤 Using voice: {voice} for lang: {target_lang}")
     
     try:
         communicate = edge_tts.Communicate(text, voice=voice)
+        chunk_count = 0
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
+                chunk_count += 1
                 yield chunk["data"]
+        print(f"🎤 TTS Stream Finished: {chunk_count} chunks sent")
     except Exception as e:
         print(f"TTS Stream Error: {e}")
 

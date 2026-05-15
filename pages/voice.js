@@ -58,6 +58,7 @@ export default function VoiceTranslate() {
 
   const langMap = useMemo(
     () => ({
+      "Auto Detect": "auto",
       English: "en",
       Vietnamese: "vi",
       Japanese: "ja",
@@ -110,6 +111,7 @@ export default function VoiceTranslate() {
 
     // Bắt đầu fetch ngay lập tức để giảm độ trễ
     const fetchPromise = fetchTTS(text, lang);
+    console.log(`🔊 speak called for: "${text.substring(0, 30)}..." lang=${lang}`);
 
     // Thêm vào hàng đợi kèm theo promise của fetch
     audioQueueRef.current.push({ text, lang, fetchPromise, isFinal });
@@ -124,19 +126,22 @@ export default function VoiceTranslate() {
 
   const fetchTTS = async (text, lang) => {
     try {
-      const token = localStorage.getItem("token");
-
-      // TỐI ƯU: Sử dụng trực tiếp URL với token để Audio object có thể stream ngay lập tức
-      // Điều này bỏ qua bước fetch -> blob -> objectURL, giúp giảm đáng kể độ trễ bắt đầu phát.
-      const params = new URLSearchParams({
-        text: text,
-        lang: lang || "auto",
-        token: token || ""
+      // Sử dụng API (axios) để fetch audio dưới dạng blob
+      // Điều này giúp tự động đính kèm token và xử lý CORS tốt hơn
+      const response = await API.get("/translation/tts", {
+        params: {
+          text: text,
+          lang: lang || "auto"
+        },
+        responseType: 'blob'
       });
 
-      return `${BASE_URL}/translation/tts?${params.toString()}`;
+      if (response.data) {
+        return URL.createObjectURL(response.data);
+      }
+      return null;
     } catch (error) {
-      console.error("❌ Prepare TTS URL error:", error);
+      console.error("❌ Fetch TTS blob error:", error);
       return null;
     }
   };
@@ -189,45 +194,56 @@ export default function VoiceTranslate() {
 
     try {
       const audioUrl = await fetchPromise;
+      console.log("🎵 Prepared audio URL:", audioUrl);
 
       if (audioUrl && isRecordingRef.current) {
-        console.log("🎵 Streaming audio from:", audioUrl);
+        console.log("🎵 Starting audio playback...");
         const audio = new Audio();
-
-        // Thiết lập các thuộc tính quan trọng cho streaming
         audio.preload = "auto";
-        audio.crossOrigin = "anonymous"; // Quan trọng khi gọi sang port khác
+        audio.crossOrigin = "anonymous";
 
         currentAudioRef.current = audio;
 
         await new Promise((resolve) => {
+          let hasResolved = false;
           const cleanup = () => {
-            console.log("✅ Audio finished/cleaned up");
+            if (hasResolved) return;
+            hasResolved = true;
+            console.log("✅ Audio cleanup called");
             if (currentAudioRef.current === audio) currentAudioRef.current = null;
             resolve();
           };
 
-          audio.oncanplaythrough = () => {
-            console.log("▶️ Audio can play through, starting...");
+          audio.onplay = () => console.log("▶️ Audio started playing");
+          audio.oncanplay = () => {
+            console.log("▶️ Audio can play, attempting to play...");
             audio.play().catch(e => {
-              console.error("❌ Play failed:", e);
+              console.error("❌ Play failed (possibly browser policy):", e);
               cleanup();
             });
           };
 
-          audio.onended = cleanup;
-          audio.onerror = (e) => {
-            console.error("❌ Audio playback error event:", e);
-            console.error("Audio error details:", audio.error);
+          audio.onended = () => {
+            console.log("🏁 Audio ended");
             cleanup();
           };
 
-          // Gán src cuối cùng để bắt đầu load
+          audio.onerror = (e) => {
+            console.error("❌ Audio error event:", e);
+            cleanup();
+          };
+
           audio.src = audioUrl;
+          console.log("🎵 Audio src set, loading...");
           audio.load();
 
-          // Safety timeout cho mỗi đoạn
-          setTimeout(cleanup, 60000);
+          // Safety timeout
+          setTimeout(() => {
+            if (!hasResolved) {
+              console.warn("⚠️ Audio playback timed out");
+              cleanup();
+            }
+          }, 15000);
         });
       }
     } catch (err) {
@@ -555,6 +571,8 @@ export default function VoiceTranslate() {
 
         if (data.is_final) {
           ensureSegment({ speakerLang });
+          console.log(`✅ Final message received: speaker=${speakerLang}, source=${sourceLang}, target=${targetLang}`);
+
           setSegments((prev) => {
             if (!prev.length) return prev;
             const [head, ...rest] = prev;
@@ -564,8 +582,9 @@ export default function VoiceTranslate() {
           });
 
           if (newTrans) {
-            // Xác định ngôn ngữ của bản dịch: nếu người nói là sourceLang thì bản dịch là targetLang và ngược lại
-            const translationLang = speakerLang === sourceLang ? targetLang : sourceLang;
+            // Xác định ngôn ngữ của bản dịch
+            const translationLang = speakerLang === sourceLang ? targetLang : (speakerLang === targetLang ? sourceLang : targetLang);
+            console.log(`🔊 Final TTS trigger: text="${newTrans.substring(0, 20)}...", lang=${translationLang}`);
             speak(newTrans, translationLang, true);
           }
 
@@ -598,7 +617,8 @@ export default function VoiceTranslate() {
           // TỐI ƯU: Phát âm thanh interim ngay khi đang dịch để đạt trải nghiệm cabin
           // Giảm ngưỡng từ 10 ký tự xuống 5 ký tự để phản hồi nhanh nhất có thể
           if (newTrans && newTrans.trim().length > 5) {
-            const translationLang = speakerLang === sourceLang ? targetLang : sourceLang;
+            const translationLang = speakerLang === sourceLang ? targetLang : (speakerLang === targetLang ? sourceLang : targetLang);
+            console.log(`🔊 Interim TTS trigger: text="${newTrans.substring(0, 20)}...", lang=${translationLang}`);
             speak(newTrans, translationLang, false);
           }
         }
@@ -631,6 +651,15 @@ export default function VoiceTranslate() {
       if (isRecordingRef.current) {
         stopRecording();
       } else {
+        // Prime audio to unlock playback
+        try {
+          const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==");
+          await silentAudio.play();
+          console.log("🔊 Audio primed successfully");
+        } catch (e) {
+          console.warn("🔊 Audio priming failed (normal for first interaction):", e);
+        }
+
         await startRecording();
       }
     } finally {

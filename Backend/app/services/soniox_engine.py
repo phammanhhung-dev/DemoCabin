@@ -14,12 +14,16 @@ async def run_soniox_bidirectional(
     source_lang: str = "vi",
     target_lang: str = "en",
     loop: asyncio.AbstractEventLoop = None,
+    language_hints: list = None,
 ):
     from soniox.client import SonioxClient
     from soniox.types import RealtimeSTTConfig, TranslationConfig
 
     if loop is None:
         loop = asyncio.get_event_loop()
+    
+    if language_hints is None:
+        language_hints = [source_lang, target_lang]
 
     def _run():
         client = SonioxClient(api_key=settings.SONIOX_API_KEY)
@@ -28,7 +32,7 @@ async def run_soniox_bidirectional(
             audio_format="pcm_s16le",
             sample_rate=16000,
             num_channels=1,
-            language_hints=[source_lang, target_lang],
+            language_hints=language_hints,
             enable_endpoint_detection=True,
             translation=TranslationConfig(
                 type="two_way",
