@@ -56,22 +56,24 @@ class ConversationSummaryRequest(BaseModel):
 
 
 # Tóm tắt
+def _reload_env():
+    """Nạp lại .env để lấy các API Key mới nhất."""
+    load_dotenv(_env_path, override=True)
+
 def _get_gemini_config():
     """Lấy cấu hình Gemini mới nhất từ môi trường."""
-    # Nạp lại .env mỗi lần gọi để đảm bảo lấy được Key mới nhất mà không cần restart server
-    load_dotenv(_env_path, override=True)
+    _reload_env()
     key = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
     model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip().strip('"').strip("'")
     return key, model
 
 
-_openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "").strip().strip('"'))
-
 def _summarize_with_xai(prompt: str) -> str:
     """
     Fallback using xAI (Grok). OpenAI-compatible.
     """
-    api_key = os.getenv("XAI_API_KEY", "").strip().strip('"')
+    _reload_env()
+    api_key = os.getenv("XAI_API_KEY", "").strip().strip('"').strip("'")
     if not api_key:
         return "FAIL: No xAI API Key"
     
@@ -197,12 +199,15 @@ def _summarize_with_openai(prompt: str) -> str:
     """
     Fallback using OpenAI (GPT-4o mini).
     """
-    api_key = os.getenv("OPENAI_API_KEY", "").strip().strip('"')
+    _reload_env()
+    api_key = os.getenv("OPENAI_API_KEY", "").strip().strip('"').strip("'")
     if not api_key:
         return "FAIL: No OpenAI API Key"
     
     try:
-        response = _openai_client.chat.completions.create(
+        # Tạo client mới với key vừa nạp
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that summarizes conversations."},
@@ -220,7 +225,8 @@ def _summarize_with_groq(prompt: str) -> str:
     """
     Fallback using Groq (Llama 3).
     """
-    api_key = os.getenv("GROQ_API_KEY", "").strip().strip('"')
+    _reload_env()
+    api_key = os.getenv("GROQ_API_KEY", "").strip().strip('"').strip("'")
     if not api_key:
         return "FAIL: No Groq API Key"
     
@@ -238,6 +244,60 @@ def _summarize_with_groq(prompt: str) -> str:
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"FAIL: Groq Error: {str(e)}"
+
+
+def _generate_fallback_summary(joined_text: str, max_segments: int = 3) -> str:
+    """
+    Tạo tóm tắt đơn giản bằng cách lấy các ý chính đầu tiên nếu AI thất bại.
+    Giúp việc trình bày không bị lỗi hiển thị.
+    """
+    if not joined_text:
+        return ""
+    # Loại bỏ các dòng trống và lấy N dòng đầu tiên
+    lines = [line.strip() for line in joined_text.split('\n') if line.strip()]
+    summary_lines = lines[:max_segments]
+    
+    if not summary_lines:
+        return ""
+        
+    res = "\n".join([f"• {line}" for line in summary_lines])
+    if len(lines) > max_segments:
+        res += "\n• ..."
+    return res
+
+
+def _summarize_with_huggingface(prompt: str) -> str:
+    """
+    Tóm tắt miễn phí hoàn toàn qua Hugging Face Inference API.
+    Không yêu cầu Credit, chỉ cần HF_TOKEN miễn phí.
+    """
+    _reload_env()
+    api_token = os.getenv("HF_TOKEN", "").strip().strip('"').strip("'")
+    if not api_token:
+        return "FAIL: No Hugging Face Token"
+
+    # Sử dụng model Mistral-7B-Instruct-v0.3 (hỗ trợ tiếng Việt khá tốt)
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
+    headers = {"Authorization": f"Bearer {api_token}"}
+    
+    try:
+        payload = {
+            "inputs": f"<s>[INST] {prompt} [/INST]",
+            "parameters": {"max_new_tokens": 500, "temperature": 0.3}
+        }
+        with httpx.Client(timeout=60) as client:
+            response = client.post(API_URL, headers=headers, json=payload)
+            if response.status_code == 200:
+                result = response.json()
+                if isinstance(result, list) and len(result) > 0:
+                    text = result[0].get("generated_text", "")
+                    # Cắt bỏ phần prompt nếu model trả về cả prompt
+                    if "[/INST]" in text:
+                        text = text.split("[/INST]")[-1].strip()
+                    return text
+            return f"FAIL: HF Error {response.status_code}: {response.text}"
+    except Exception as e:
+        return f"FAIL: HF Exception: {str(e)}"
 
 
 @router.post("/summary")
@@ -282,25 +342,36 @@ def summarize_conversation(
         if not groq_text.startswith("FAIL:"):
             text = groq_text
         else:
-            # Lớp 3: xAI (Grok)
-            provider = "xai"
-            model = "grok-2-latest"
-            xai_text = _summarize_with_xai(prompt)
-            if not xai_text.startswith("FAIL:"):
-                text = xai_text
+            # Lớp 3: Hugging Face (Miễn phí, không cần credit)
+            provider = "huggingface"
+            model = "mistral-7b"
+            hf_text = _summarize_with_huggingface(prompt)
+            if not hf_text.startswith("FAIL:"):
+                text = hf_text
             else:
-                # Lớp 4: OpenAI
-                provider = "openai"
-                model = "gpt-4o-mini"
-                openai_text = _summarize_with_openai(prompt)
-                if not openai_text.startswith("FAIL:"):
-                    text = openai_text
+                # Lớp 4: xAI (Grok)
+                provider = "xai"
+                model = "grok-2-latest"
+                xai_text = _summarize_with_xai(prompt)
+                if not xai_text.startswith("FAIL:"):
+                    text = xai_text
                 else:
-                    # Tất cả đều thất bại
-                    return {
-                        "original": "",
-                        "translated": "Hệ thống đang quá tải hoặc hết hạn ngạch tất cả dịch vụ AI (Gemini, Groq, Grok, OpenAI). Vui lòng thử lại sau.",
-                    }
+                    # Lớp 5: OpenAI
+                    provider = "openai"
+                    model = "gpt-4o-mini"
+                    openai_text = _summarize_with_openai(prompt)
+                    if not openai_text.startswith("FAIL:"):
+                        text = openai_text
+                    else:
+                        # Tất cả AI đều thất bại - Sử dụng fallback thủ công để trình bày
+                        orig_fallback = _generate_fallback_summary(joined_original)
+                        tran_fallback = _generate_fallback_summary(joined_translated)
+                        
+                        return {
+                            "original": orig_fallback or "Không có nội dung để tóm tắt.",
+                            "translated": tran_fallback or "Nội dung tóm tắt đang được cập nhật.",
+                            "is_fallback": True
+                        }
 
     orig, tran = _split_bilingual_summary(text)
 
